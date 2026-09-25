@@ -1,0 +1,6 @@
+{
+  "name": "BraillePad - Braille Typing Tutor for Children",
+  "description": "A professional audio-first Braille typing tutor designed for blind children with Duolingo-style level progression, ESP32 Bluetooth keyboard integration, and a high-contrast parent dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
