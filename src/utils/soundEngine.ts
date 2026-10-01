@@ -9,6 +9,8 @@ class SoundEngine {
   public soundEffectsEnabled = true;
   public speechEnabled = true;
   private isAudioUnlocked = false;
+  private currentUtterance: SpeechSynthesisUtterance | null = null;
+  private speakTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -122,6 +124,11 @@ class SoundEngine {
       return;
     }
 
+    if (this.speakTimeoutId) {
+      clearTimeout(this.speakTimeoutId);
+      this.speakTimeoutId = null;
+    }
+
     try {
       this.speechSynth.cancel();
 
@@ -131,6 +138,8 @@ class SoundEngine {
       }
 
       const utterance = new SpeechSynthesisUtterance(text);
+      this.currentUtterance = utterance;
+
       if (this.preferredVoice) {
         utterance.voice = this.preferredVoice;
       }
@@ -138,18 +147,43 @@ class SoundEngine {
       utterance.pitch = this.speechPitch;
       utterance.volume = 1.0;
 
-      if (onEnd) {
-        utterance.onend = onEnd;
-        utterance.onerror = () => onEnd();
-      }
+      let hasFinished = false;
+      const finish = () => {
+        if (hasFinished) return;
+        hasFinished = true;
+        if (this.speakTimeoutId) {
+          clearTimeout(this.speakTimeoutId);
+          this.speakTimeoutId = null;
+        }
+        this.currentUtterance = null;
+        if (onEnd) onEnd();
+      };
 
-      this.speechSynth.speak(utterance);
+      utterance.onend = finish;
+      utterance.onerror = finish;
+
+      // Chrome/Safari GC / freeze safeguard timer based on text length
+      const wordCount = Math.max(1, text.split(/\s+/).length);
+      const safeDurationMs = Math.max(2200, (wordCount / Math.max(0.4, this.speechRate)) * 520 + 1600);
+      this.speakTimeoutId = setTimeout(finish, safeDurationMs);
+
+      // Brief tick delay to guarantee browser cancel has cleared previous queue
+      setTimeout(() => {
+        if (this.speechSynth && this.currentUtterance === utterance) {
+          this.speechSynth.speak(utterance);
+        }
+      }, 15);
     } catch {
       if (onEnd) onEnd();
     }
   }
 
   public stopSpeaking() {
+    if (this.speakTimeoutId) {
+      clearTimeout(this.speakTimeoutId);
+      this.speakTimeoutId = null;
+    }
+    this.currentUtterance = null;
     if (this.speechSynth) {
       try {
         this.speechSynth.cancel();

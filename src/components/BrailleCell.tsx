@@ -4,6 +4,7 @@ import { ThemeMode } from '../types';
 interface BrailleCellProps {
   activeDots: number[];
   targetDots?: number[];
+  errorDots?: number[];
   theme: ThemeMode;
   onDotClick?: (dotNumber: number) => void;
   interactive?: boolean;
@@ -14,6 +15,7 @@ interface BrailleCellProps {
 export const BrailleCell: React.FC<BrailleCellProps> = ({
   activeDots,
   targetDots,
+  errorDots,
   theme,
   onDotClick,
   interactive = false,
@@ -46,26 +48,43 @@ export const BrailleCell: React.FC<BrailleCellProps> = ({
       : 'gap-x-6 xs:gap-x-8 sm:gap-x-10 gap-y-3 xs:gap-y-3.5 sm:gap-y-4';
 
   const getDotStyles = (num: number) => {
-    const isActive = activeDots.includes(num);
-    const isTarget = targetDots ? targetDots.includes(num) : false;
+    const isTarget = targetDots ? targetDots.includes(num) : activeDots.includes(num);
+    const isError = errorDots ? errorDots.includes(num) : false;
+    const hasErrorState = errorDots && errorDots.length > 0;
 
-    if (theme === 'yellow-black') {
-      if (isActive || isTarget) {
+    // Error visual diagnosis:
+    // If error state active and this dot was pressed erroneously (not in target)
+    if (hasErrorState && isError && !isTarget) {
+      return 'bg-rose-600 text-white border-rose-400 shadow-[0_0_24px_rgba(244,63,94,0.9)] scale-[1.04] ring-2 ring-rose-400/50';
+    }
+
+    // If this dot was pressed AND it was a target dot (correct part of chord)
+    if (hasErrorState && isError && isTarget) {
+      return 'bg-emerald-500 text-slate-950 border-emerald-300 shadow-[0_0_20px_rgba(16,185,129,0.8)] scale-[1.04]';
+    }
+
+    // If this dot is a target dot that was missed in error
+    if (hasErrorState && !isError && isTarget) {
+      return 'bg-amber-500/30 text-amber-300 border-2 border-dashed border-amber-400 animate-pulse';
+    }
+
+    // Normal active target dot
+    if (isTarget) {
+      if (theme === 'yellow-black') {
         return 'bg-yellow-400 text-black border-yellow-300 shadow-[0_0_24px_rgba(250,204,21,0.9)] scale-[1.03]';
       }
-      return 'bg-black text-yellow-600/40 border-yellow-800/80 hover:border-yellow-600';
-    }
-
-    if (theme === 'light') {
-      if (isActive || isTarget) {
+      if (theme === 'light') {
         return 'bg-amber-500 text-slate-950 border-amber-400 shadow-[0_0_20px_rgba(245,158,11,0.65)] scale-[1.03]';
       }
-      return 'bg-slate-100 text-slate-400 border-slate-300 hover:border-slate-400';
+      return 'bg-gradient-to-br from-amber-300 via-amber-500 to-amber-600 text-slate-950 border-amber-300 shadow-[0_0_24px_rgba(245,158,11,0.75)] scale-[1.03]';
     }
 
-    // Default 'dark' theme
-    if (isActive || isTarget) {
-      return 'bg-gradient-to-br from-amber-300 via-amber-500 to-amber-600 text-slate-950 border-amber-300 shadow-[0_0_24px_rgba(245,158,11,0.75)] scale-[1.03]';
+    // Inactive dot
+    if (theme === 'yellow-black') {
+      return 'bg-black text-yellow-600/40 border-yellow-800/80 hover:border-yellow-600';
+    }
+    if (theme === 'light') {
+      return 'bg-slate-100 text-slate-400 border-slate-300 hover:border-slate-400';
     }
     return 'bg-slate-900/90 text-slate-500 border-slate-700/80 hover:border-slate-500';
   };
@@ -90,9 +109,9 @@ export const BrailleCell: React.FC<BrailleCellProps> = ({
         aria-label="Braille 6-dot cell diagram"
       >
         {dotsLayout.map(({ num, col, row, finger }) => {
-          const isActive = activeDots.includes(num);
-          const isTarget = targetDots ? targetDots.includes(num) : false;
-          const isLit = isActive || isTarget;
+          const isTarget = targetDots ? targetDots.includes(num) : activeDots.includes(num);
+          const isError = errorDots ? errorDots.includes(num) : false;
+          const isLit = isTarget || isError;
 
           return (
             <button

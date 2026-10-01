@@ -548,7 +548,8 @@ export const STANDALONE_HTML_CODE = `<!DOCTYPE html>
     function loadTarget() {
       const lvl = LEVELS[currentLevelIdx];
       const letters = lvl.letters;
-      targetLetter = letters[Math.floor(Math.random() * letters.length)];
+      const candidates = letters.filter(function(l) { return l !== targetLetter; });
+      targetLetter = candidates.length > 0 ? candidates[Math.floor(Math.random() * candidates.length)] : letters[0];
       const info = BRAILLE_MAP[targetLetter] || { dots: [1], word: 'Letter', example: '', buttons: '' };
 
       document.getElementById('letter-display').textContent = targetLetter.toUpperCase();
@@ -580,6 +581,7 @@ export const STANDALONE_HTML_CODE = `<!DOCTYPE html>
     });
 
     window.addEventListener('keydown', (e) => {
+      if (e.repeat) return;
       if (!audioUnlocked) {
         startApp();
         return;

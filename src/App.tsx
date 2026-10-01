@@ -25,6 +25,9 @@ import {
   Play,
   Sparkles,
   Bluetooth,
+  Infinity,
+  HelpCircle,
+  Trash2,
 } from 'lucide-react';
 import {
   BRAILLE_ALPHABET,
@@ -42,57 +45,150 @@ import { BrailleCell } from './components/BrailleCell';
 import { PerkinsKeyboardGuide } from './components/PerkinsKeyboardGuide';
 import { DuolingoLevelDrawer } from './components/DuolingoLevelDrawer';
 import { LevelCompleteModal } from './components/LevelCompleteModal';
+import { OutOfHeartsModal } from './components/OutOfHeartsModal';
 import { StandaloneExportModal } from './components/StandaloneExportModal';
 import { AppMode, LetterRange, ThemeMode, LessonLevel, UserStats } from './types';
 
-export default function App() {
-  // Navigation & Mode State
-  const [mode, setMode] = useState<AppMode>('lessons');
-  const [range, setRange] = useState<LetterRange>('A-J');
-  const [theme, setTheme] = useState<ThemeMode>('dark');
-  const [audioStarted, setAudioStarted] = useState<boolean>(false);
+const STORAGE_KEY_STATS = 'braillepad_v1_stats';
+const STORAGE_KEY_SETTINGS = 'braillepad_v1_settings';
 
-  // Modals & Drawers
-  const [isLevelDrawerOpen, setIsLevelDrawerOpen] = useState<boolean>(false);
-  const [isLevelCompleteModalOpen, setIsLevelCompleteModalOpen] = useState<boolean>(false);
-  const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
-  const [isEsp32ModalOpen, setIsEsp32ModalOpen] = useState<boolean>(false);
-  const [showSettings, setShowSettings] = useState<boolean>(false);
-  const [showAlphabetStrip, setShowAlphabetStrip] = useState<boolean>(false);
-
-  // Audio / App Settings (Default calm & slow voice: 0.75 for 6+ year olds)
-  const [speechRate, setSpeechRate] = useState<number>(0.75);
-  const [soundEffects, setSoundEffects] = useState<boolean>(true);
-  const [infiniteHearts, setInfiniteHearts] = useState<boolean>(true);
-  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
-  const [selectedVoiceName, setSelectedVoiceName] = useState<string>('');
-
-  // Duolingo Progression State
-  const [currentLevelId, setCurrentLevelId] = useState<number>(1);
-  const [currentStep, setCurrentStep] = useState<number>(1);
-  const [userStats, setUserStats] = useState<UserStats>({
+function loadStoredStats(): UserStats {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_STATS);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        xp: typeof parsed.xp === 'number' ? parsed.xp : 0,
+        streak: typeof parsed.streak === 'number' ? parsed.streak : 0,
+        completedLevels: Array.isArray(parsed.completedLevels) ? parsed.completedLevels : [],
+        starsPerLevel:
+          typeof parsed.starsPerLevel === 'object' && parsed.starsPerLevel ? parsed.starsPerLevel : {},
+        hearts: typeof parsed.hearts === 'number' ? Math.max(0, parsed.hearts) : 5,
+        totalKeystrokes: typeof parsed.totalKeystrokes === 'number' ? parsed.totalKeystrokes : 0,
+      };
+    }
+  } catch (err) {
+    console.warn('Could not read stored stats', err);
+  }
+  return {
     xp: 0,
     streak: 0,
     completedLevels: [],
     starsPerLevel: {},
     hearts: 5,
     totalKeystrokes: 0,
-  });
+  };
+}
+
+function loadStoredSettings() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_SETTINGS);
+    if (raw) {
+      return JSON.parse(raw);
+    }
+  } catch {
+    // Ignore
+  }
+  return null;
+}
+
+/**
+ * Builds a structured, non-repeating sequence for a lesson level.
+ * Guarantees every letter in the level is introduced, and no two consecutive steps
+ * ever have the same letter.
+ */
+function generateLessonSequence(level: LessonLevel): string[] {
+  const letters = level.letters;
+  if (!letters || letters.length === 0) return ['a'];
+  const uniqueLetters = Array.from(new Set(letters));
+  if (uniqueLetters.length === 1) return Array(level.totalSteps).fill(uniqueLetters[0]);
+
+  const sequence: string[] = [];
+
+  // Phase 1: Introduce every unique letter of this level in order so the child learns all of them
+  for (const char of uniqueLetters) {
+    if (sequence.length >= level.totalSteps) break;
+    sequence.push(char);
+  }
+
+  // Phase 2: If totalSteps > uniqueLetters.length, fill remaining steps with balanced review without consecutive repeats
+  let lastChar = sequence[sequence.length - 1];
+  while (sequence.length < level.totalSteps) {
+    const candidates = uniqueLetters.filter((c) => c !== lastChar);
+    // Find candidate letters with lowest frequency so far to ensure even distribution
+    const counts = candidates.map((c) => ({
+      char: c,
+      count: sequence.filter((s) => s === c).length,
+    }));
+    counts.sort((a, b) => a.count - b.count);
+    const minCount = counts[0].count;
+    const bestCandidates = counts.filter((c) => c.count === minCount).map((c) => c.char);
+
+    const chosen = bestCandidates[Math.floor(Math.random() * bestCandidates.length)];
+    sequence.push(chosen);
+    lastChar = chosen;
+  }
+
+  return sequence;
+}
+
+export default function App() {
+  const savedSettings = useRef(loadStoredSettings()).current;
+
+  // Navigation & Mode State
+  const [mode, setMode] = useState<AppMode>('lessons');
+  const [range, setRange] = useState<LetterRange>('A-J');
+  const [theme, setTheme] = useState<ThemeMode>(savedSettings?.theme || 'dark');
+  const [audioStarted, setAudioStarted] = useState<boolean>(false);
+
+  // Modals & Drawers
+  const [isLevelDrawerOpen, setIsLevelDrawerOpen] = useState<boolean>(false);
+  const [isLevelCompleteModalOpen, setIsLevelCompleteModalOpen] = useState<boolean>(false);
+  const [isOutOfHeartsModalOpen, setIsOutOfHeartsModalOpen] = useState<boolean>(false);
+  const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
+  const [isEsp32ModalOpen, setIsEsp32ModalOpen] = useState<boolean>(false);
+  const [showSettings, setShowSettings] = useState<boolean>(false);
+  const [showAlphabetStrip, setShowAlphabetStrip] = useState<boolean>(false);
+
+  // Audio / App Settings (Default calm & slow voice: 0.75 for 6+ year olds)
+  const [speechRate, setSpeechRate] = useState<number>(savedSettings?.speechRate ?? 0.75);
+  const [soundEffects, setSoundEffects] = useState<boolean>(savedSettings?.soundEffects ?? true);
+  const [infiniteHearts, setInfiniteHearts] = useState<boolean>(savedSettings?.infiniteHearts ?? true);
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selectedVoiceName, setSelectedVoiceName] = useState<string>('');
+
+  // Duolingo Progression State
+  const [currentLevelId, setCurrentLevelId] = useState<number>(savedSettings?.currentLevelId || 1);
+  const [currentStep, setCurrentStep] = useState<number>(1);
+  const [userStats, setUserStats] = useState<UserStats>(loadStoredStats);
+
+  // Performance & error tracking per level session
+  const [levelAccuracy, setLevelAccuracy] = useState<number>(100);
+  const [levelStars, setLevelStars] = useState<number>(3);
+  const [levelEarnedXp, setLevelEarnedXp] = useState<number>(25);
+  const levelCorrectCountRef = useRef<number>(0);
+  const levelErrorCountRef = useRef<number>(0);
 
   // Current Target State
   const [targetLetter, setTargetLetter] = useState<string>('a');
   const [discoveredLetter, setDiscoveredLetter] = useState<string>('c');
   const [lastTypedLetter, setLastTypedLetter] = useState<string | null>(null);
+  const [errorDots, setErrorDots] = useState<number[] | null>(null);
   const [feedbackStatus, setFeedbackStatus] = useState<'idle' | 'success' | 'wrong'>('idle');
   const [feedbackMessage, setFeedbackMessage] = useState<string>(
     'Welcome to BraillePad! Press any key or Braille chord to begin.'
   );
 
-  // Word spelling challenge state
-  const [currentWordObj, setCurrentWordObj] = useState<{ word: string; letters: string[]; meaning: string } | null>(null);
+  // Word spelling challenge state (Level 9)
+  const [currentWordObj, setCurrentWordObj] = useState<{
+    word: string;
+    letters: string[];
+    meaning: string;
+  } | null>(null);
   const [wordLetterIdx, setWordLetterIdx] = useState<number>(0);
 
-  // Refs for window keydown listener closures
+  // Input debouncing & synchronization refs
+  const isProcessingInputRef = useRef<boolean>(false);
   const modeRef = useRef(mode);
   modeRef.current = mode;
   const targetLetterRef = useRef(targetLetter);
@@ -105,9 +201,80 @@ export default function App() {
   audioStartedRef.current = audioStarted;
   const isLevelCompleteOpenRef = useRef(isLevelCompleteModalOpen);
   isLevelCompleteOpenRef.current = isLevelCompleteModalOpen;
+  const isOutOfHeartsOpenRef = useRef(isOutOfHeartsModalOpen);
+  isOutOfHeartsOpenRef.current = isOutOfHeartsModalOpen;
 
   // Active level object
   const currentLevel = LESSON_LEVELS.find((l) => l.id === currentLevelId) || LESSON_LEVELS[0];
+  const lessonPlanRef = useRef<string[]>(generateLessonSequence(currentLevel));
+  const practiceDeckRef = useRef<string[]>([]);
+
+  // Reset practice deck when letter range changes
+  useEffect(() => {
+    practiceDeckRef.current = [];
+  }, [range]);
+
+  // Non-repeating Free Practice letter drawer using a shuffle deck
+  const getNextPracticeLetter = useCallback((selectedRange: LetterRange, current: string): string => {
+    const pool =
+      selectedRange === 'A-J' ? LETTERS_A_TO_J : selectedRange === 'A-T' ? LETTERS_A_TO_T : LETTERS_A_TO_Z;
+
+    if (practiceDeckRef.current.length === 0) {
+      const shuffled = [...pool];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      if (shuffled[0] === current && shuffled.length > 1) {
+        [shuffled[0], shuffled[shuffled.length - 1]] = [shuffled[shuffled.length - 1], shuffled[0]];
+      }
+      practiceDeckRef.current = shuffled;
+    }
+
+    let next = practiceDeckRef.current.pop()!;
+    if (next === current && practiceDeckRef.current.length > 0) {
+      const swapIdx = Math.floor(Math.random() * practiceDeckRef.current.length);
+      const temp = practiceDeckRef.current[swapIdx];
+      practiceDeckRef.current[swapIdx] = next;
+      next = temp;
+    }
+
+    targetLetterRef.current = next;
+    return next;
+  }, []);
+
+  // Save stats to localStorage whenever changed
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_STATS, JSON.stringify(userStats));
+    } catch {
+      // Ignore
+    }
+  }, [userStats]);
+
+  // Save settings to localStorage whenever changed
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        STORAGE_KEY_SETTINGS,
+        JSON.stringify({
+          theme,
+          speechRate,
+          soundEffects,
+          infiniteHearts,
+          currentLevelId,
+        })
+      );
+    } catch {
+      // Ignore
+    }
+  }, [theme, speechRate, soundEffects, infiniteHearts, currentLevelId]);
+
+  // Sync soundEngine settings
+  useEffect(() => {
+    sound.speechRate = speechRate;
+    sound.soundEffectsEnabled = soundEffects;
+  }, [speechRate, soundEffects]);
 
   // Initialize voices
   useEffect(() => {
@@ -124,6 +291,9 @@ export default function App() {
 
   // Pick next letter/target within current level
   const pickNextTargetForLevel = useCallback((level: LessonLevel, step: number) => {
+    isProcessingInputRef.current = false;
+    setErrorDots(null);
+
     // If it's a word-builder level (Level 9)
     if (level.id === 9) {
       const wordChoice = SPELLING_WORDS[(step - 1) % SPELLING_WORDS.length];
@@ -131,9 +301,12 @@ export default function App() {
       setWordLetterIdx(0);
       const firstLetter = wordChoice.letters[0];
       const letterInfo = BRAILLE_ALPHABET[firstLetter];
+      targetLetterRef.current = firstLetter;
       setTargetLetter(firstLetter);
       setFeedbackStatus('idle');
-      setFeedbackMessage(`Spell ${wordChoice.word}: Type letter ${firstLetter.toUpperCase()}. ${letterInfo.buttonInstructions}`);
+      setFeedbackMessage(
+        `Spell ${wordChoice.word}: Type letter ${firstLetter.toUpperCase()}. ${letterInfo.buttonInstructions}`
+      );
       sound.speak(
         `Let's spell the word ${wordChoice.word}! Like ${wordChoice.meaning}. First letter is ${firstLetter.toUpperCase()}. ${letterInfo.buttonInstructions}`
       );
@@ -141,34 +314,46 @@ export default function App() {
     }
 
     setCurrentWordObj(null);
-    const pool = level.letters;
-    let candidates = pool.filter((l) => l !== targetLetterRef.current);
-    if (candidates.length === 0) candidates = pool;
-    const nextChar = candidates[Math.floor(Math.random() * candidates.length)];
+    if (!lessonPlanRef.current || lessonPlanRef.current.length !== level.totalSteps) {
+      lessonPlanRef.current = generateLessonSequence(level);
+    }
+    const stepIdx = Math.max(0, Math.min(step - 1, lessonPlanRef.current.length - 1));
+    const nextChar = lessonPlanRef.current[stepIdx];
     const letterInfo = BRAILLE_ALPHABET[nextChar];
 
+    targetLetterRef.current = nextChar;
     setTargetLetter(nextChar);
     setFeedbackStatus('idle');
-    setFeedbackMessage(`Type ${nextChar.toUpperCase()} (${letterInfo.word}) — ${letterInfo.buttonInstructions}`);
+    setFeedbackMessage(
+      `Type ${nextChar.toUpperCase()} (${letterInfo.word}) — ${letterInfo.buttonInstructions}`
+    );
 
-    // Engaging, slow, warm Montessori-style storytelling and explicit finger instructions
     sound.speak(
       `Let's explore letter ${nextChar.toUpperCase()}! ${nextChar.toUpperCase()} is for ${letterInfo.word}... ${letterInfo.childFriendlyExample}. Here is how to type it: ${letterInfo.buttonInstructions}`
     );
   }, []);
 
   // Launch a level
-  const handleSelectLevel = useCallback((lvl: LessonLevel) => {
-    setCurrentLevelId(lvl.id);
-    setCurrentStep(1);
-    setLastTypedLetter(null);
-    setFeedbackStatus('idle');
-    setMode('lessons');
-    sound.playModeSwitchTone();
-    sound.speak(`Welcome to Level ${lvl.id}! ${lvl.title}... ${lvl.description}`, () => {
-      pickNextTargetForLevel(lvl, 1);
-    });
-  }, [pickNextTargetForLevel]);
+  const handleSelectLevel = useCallback(
+    (lvl: LessonLevel) => {
+      setCurrentLevelId(lvl.id);
+      setCurrentStep(1);
+      setLastTypedLetter(null);
+      setErrorDots(null);
+      setFeedbackStatus('idle');
+      setMode('lessons');
+      levelCorrectCountRef.current = 0;
+      levelErrorCountRef.current = 0;
+      isProcessingInputRef.current = false;
+      lessonPlanRef.current = generateLessonSequence(lvl);
+
+      sound.playModeSwitchTone();
+      sound.speak(`Welcome to Level ${lvl.id}! ${lvl.title}... ${lvl.description}`, () => {
+        pickNextTargetForLevel(lvl, 1);
+      });
+    },
+    [pickNextTargetForLevel]
+  );
 
   // Start audio session
   const startAudioSession = useCallback(() => {
@@ -179,6 +364,7 @@ export default function App() {
     sound.speak(
       'Welcome to BraillePad! Your keyboard is connected. Listen closely to each story and I will teach you which buttons to press.'
     );
+    lessonPlanRef.current = generateLessonSequence(currentLevel);
     pickNextTargetForLevel(currentLevel, 1);
   }, [currentLevel, pickNextTargetForLevel, speechRate]);
 
@@ -187,44 +373,68 @@ export default function App() {
     (newMode: AppMode) => {
       setMode(newMode);
       setLastTypedLetter(null);
+      setErrorDots(null);
       setFeedbackStatus('idle');
+      isProcessingInputRef.current = false;
       sound.playModeSwitchTone();
 
       if (newMode === 'discovery') {
         setFeedbackMessage('Discovery mode active. Press any Braille chord to hear its story and dots.');
-        sound.speak('Discovery mode! Press any buttons on your Braille keyboard to hear what letter they make.');
+        sound.speak(
+          'Discovery mode! Press any buttons on your Braille keyboard to hear what letter they make.'
+        );
       } else if (newMode === 'practice') {
         setFeedbackMessage('Free practice mode. Practice any letter across the selected range.');
-        const pool = range === 'A-J' ? LETTERS_A_TO_J : range === 'A-T' ? LETTERS_A_TO_T : LETTERS_A_TO_Z;
-        const rand = pool[Math.floor(Math.random() * pool.length)];
+        const rand = getNextPracticeLetter(range, targetLetterRef.current);
         const info = BRAILLE_ALPHABET[rand];
         setTargetLetter(rand);
-        sound.speak(`Free practice! Try typing the letter ${rand.toUpperCase()}, as in ${info.word}. ${info.buttonInstructions}`);
+        targetLetterRef.current = rand;
+        sound.speak(
+          `Free practice! Try typing the letter ${rand.toUpperCase()}, as in ${info.word}. ${info.buttonInstructions}`
+        );
       } else {
         sound.speak(`Lessons mode! Level ${currentLevel.id}: ${currentLevel.title}.`);
+        if (!lessonPlanRef.current || lessonPlanRef.current.length !== currentLevel.totalSteps) {
+          lessonPlanRef.current = generateLessonSequence(currentLevel);
+        }
         pickNextTargetForLevel(currentLevel, currentStep);
       }
     },
-    [currentLevel, currentStep, pickNextTargetForLevel, range]
+    [currentLevel, currentStep, getNextPracticeLetter, pickNextTargetForLevel, range]
   );
 
   // Complete level logic
   const handleLevelCompleted = useCallback(() => {
+    const correct = levelCorrectCountRef.current;
+    const errors = levelErrorCountRef.current;
+    const total = correct + errors;
+    const accuracy = total > 0 ? Math.round((correct / total) * 100) : 100;
+    const stars = errors === 0 ? 3 : errors <= 2 ? 2 : 1;
+    const bonusXp = stars === 3 ? 15 : stars === 2 ? 5 : 0;
+    const totalEarnedXp = 25 + bonusXp;
+
+    setLevelAccuracy(accuracy);
+    setLevelStars(stars);
+    setLevelEarnedXp(totalEarnedXp);
+
     sound.playLevelCompleteFanfare();
     setIsLevelCompleteModalOpen(true);
 
-    setUserStats((prev) => ({
-      ...prev,
-      xp: prev.xp + 25,
-      completedLevels: Array.from(new Set([...prev.completedLevels, currentLevelIdRef.current])),
-      starsPerLevel: {
-        ...prev.starsPerLevel,
-        [currentLevelIdRef.current]: 3,
-      },
-    }));
+    setUserStats((prev) => {
+      const currentBest = prev.starsPerLevel[currentLevelIdRef.current] || 0;
+      return {
+        ...prev,
+        xp: prev.xp + totalEarnedXp,
+        completedLevels: Array.from(new Set([...prev.completedLevels, currentLevelIdRef.current])),
+        starsPerLevel: {
+          ...prev.starsPerLevel,
+          [currentLevelIdRef.current]: Math.max(currentBest, stars),
+        },
+      };
+    });
 
     sound.speak(
-      `Hooray! Level ${currentLevel.id} is complete! You earned 25 shiny XP crystals and 3 stars! Press Space to explore the next level!`
+      `Hooray! Level ${currentLevel.id} is complete! You earned ${totalEarnedXp} shiny XP crystals with ${stars} stars! Press Space to explore the next level!`
     );
   }, [currentLevel.id]);
 
@@ -235,6 +445,7 @@ export default function App() {
     if (nextLvl) {
       handleSelectLevel(nextLvl);
     } else {
+      sound.playLevelCompleteFanfare();
       sound.speak('Hooray! You are the grand champion of BraillePad! You have mastered all levels!');
     }
   }, [currentLevelId, handleSelectLevel]);
@@ -243,6 +454,9 @@ export default function App() {
   const handleReplayCurrentLevel = useCallback(() => {
     setIsLevelCompleteModalOpen(false);
     setCurrentStep(1);
+    levelCorrectCountRef.current = 0;
+    levelErrorCountRef.current = 0;
+    lessonPlanRef.current = generateLessonSequence(currentLevel);
     pickNextTargetForLevel(currentLevel, 1);
   }, [currentLevel, pickNextTargetForLevel]);
 
@@ -255,6 +469,33 @@ export default function App() {
     }));
     sound.playStreakFanfare();
     sound.speak('All learning levels unlocked for parent or teacher practice.');
+  }, []);
+
+  // Reset progress for new student
+  const handleResetProgress = useCallback(() => {
+    if (
+      window.confirm(
+        'Are you sure you want to reset all XP, streak, and level progress for a new student?'
+      )
+    ) {
+      const freshStats: UserStats = {
+        xp: 0,
+        streak: 0,
+        completedLevels: [],
+        starsPerLevel: {},
+        hearts: 5,
+        totalKeystrokes: 0,
+      };
+      setUserStats(freshStats);
+      setCurrentLevelId(1);
+      setCurrentStep(1);
+      try {
+        localStorage.removeItem(STORAGE_KEY_STATS);
+      } catch {
+        // Ignore
+      }
+      sound.speak('Progress reset for a new learning session. Starting at Level 1.');
+    }
   }, []);
 
   // Main Keystroke Handler (ESP32 Bluetooth Keyboard or standard keyboard)
@@ -273,7 +514,7 @@ export default function App() {
       // DISCOVERY MODE
       if (curMode === 'discovery') {
         setDiscoveredLetter(char);
-        const dotsText = formatDotsDescription(letterInfo.dots);
+        setErrorDots(null);
         setFeedbackStatus('idle');
         setFeedbackMessage(`${char.toUpperCase()} (${letterInfo.word}) — ${letterInfo.buttonInstructions}`);
         sound.speak(
@@ -289,9 +530,19 @@ export default function App() {
         setLastTypedLetter(char);
 
         if (char === target) {
+          isProcessingInputRef.current = true;
+          setErrorDots(null);
           setFeedbackStatus('success');
           sound.playSuccessTone();
-          setUserStats((prev) => ({ ...prev, streak: prev.streak + 1, xp: prev.xp + 5 }));
+
+          setUserStats((prev) => {
+            const newStreak = prev.streak + 1;
+            if (newStreak > 0 && newStreak % 5 === 0) {
+              sound.playStreakFanfare();
+            }
+            return { ...prev, streak: newStreak, xp: prev.xp + 5 };
+          });
+
           setFeedbackMessage(`Awesome! Correct letter is ${char.toUpperCase()}!`);
 
           const praises = ['Hooray! You did it!', 'Superstar! Exactly right!', 'High five! Perfect!'];
@@ -299,19 +550,44 @@ export default function App() {
 
           sound.speak(p, () => {
             setTimeout(() => {
-              const pool = range === 'A-J' ? LETTERS_A_TO_J : range === 'A-T' ? LETTERS_A_TO_T : LETTERS_A_TO_Z;
-              const nextRand = pool.filter((l) => l !== target)[Math.floor(Math.random() * (pool.length - 1))] || pool[0];
+              const nextRand = getNextPracticeLetter(range, target);
               const nextInfo = BRAILLE_ALPHABET[nextRand];
+              targetLetterRef.current = nextRand;
               setTargetLetter(nextRand);
-              sound.speak(`Next one! Type the letter ${nextRand.toUpperCase()}, as in ${nextInfo.word}. ${nextInfo.buttonInstructions}`);
+              isProcessingInputRef.current = false;
+              sound.speak(
+                `Next one! Type the letter ${nextRand.toUpperCase()}, as in ${nextInfo.word}. ${nextInfo.buttonInstructions}`
+              );
             }, 450);
           });
         } else {
+          const wrongDots = letterInfo.dots;
+          setErrorDots(wrongDots);
           setFeedbackStatus('wrong');
           sound.playGentleRetryTone();
-          setUserStats((prev) => ({ ...prev, streak: 0 }));
-          setFeedbackMessage(`Good try! You typed ${char.toUpperCase()}. Let's find ${target.toUpperCase()}: ${targetInfo.buttonInstructions}`);
-          sound.speak(`Good try! You pressed ${char.toUpperCase()}. Let's find ${target.toUpperCase()} together! ${targetInfo.buttonInstructions}`);
+
+          setUserStats((prev) => {
+            const newHearts = infiniteHearts ? prev.hearts : Math.max(0, prev.hearts - 1);
+            if (!infiniteHearts && newHearts <= 0) {
+              setTimeout(() => {
+                setIsOutOfHeartsModalOpen(true);
+                sound.speak("Need more hearts? You can refill them or turn on infinite hearts!");
+              }, 500);
+            }
+            return {
+              ...prev,
+              streak: 0,
+              hearts: newHearts,
+            };
+          });
+
+          setFeedbackMessage(
+            `Good try! You typed ${char.toUpperCase()}. Let's find ${target.toUpperCase()}: ${targetInfo.buttonInstructions}`
+          );
+          sound.speak(
+            `Good try! You pressed ${char.toUpperCase()}. Let's find ${target.toUpperCase()} together! ${targetInfo.buttonInstructions}`
+          );
+          isProcessingInputRef.current = false;
         }
         return;
       }
@@ -323,12 +599,17 @@ export default function App() {
 
       if (char === target) {
         // Correct answer
+        isProcessingInputRef.current = true;
+        setErrorDots(null);
+        levelCorrectCountRef.current += 1;
         setFeedbackStatus('success');
         sound.playGemXpSound();
 
         setUserStats((prev) => {
           const newStreak = prev.streak + 1;
-          if (newStreak % 5 === 0) sound.playStreakFanfare();
+          if (newStreak > 0 && newStreak % 5 === 0) {
+            sound.playStreakFanfare();
+          }
           return {
             ...prev,
             xp: prev.xp + 10,
@@ -336,7 +617,7 @@ export default function App() {
           };
         });
 
-        // Word spelling mode check
+        // Word spelling challenge check (Level 9)
         if (currentWordObj) {
           const nextIdx = wordLetterIdx + 1;
           if (nextIdx < currentWordObj.letters.length) {
@@ -344,8 +625,34 @@ export default function App() {
             const nextChar = currentWordObj.letters[nextIdx];
             const nextInfo = BRAILLE_ALPHABET[nextChar];
             setTargetLetter(nextChar);
-            setFeedbackMessage(`Super! Next letter in ${currentWordObj.word} is ${nextChar.toUpperCase()}: ${nextInfo.buttonInstructions}`);
-            sound.speak(`Super! The next letter is ${nextChar.toUpperCase()}. ${nextInfo.buttonInstructions}`);
+            setFeedbackMessage(
+              `Super! Next letter in ${currentWordObj.word} is ${nextChar.toUpperCase()}: ${nextInfo.buttonInstructions}`
+            );
+            sound.speak(
+              `Super! Next letter is ${nextChar.toUpperCase()}. ${nextInfo.buttonInstructions}`,
+              () => {
+                isProcessingInputRef.current = false;
+              }
+            );
+            return;
+          } else {
+            // Word completely spelled!
+            sound.playStreakFanfare();
+            setFeedbackMessage(`Awesome! You spelled the word ${currentWordObj.word}!`);
+            sound.speak(
+              `Awesome! You spelled the entire word: ${currentWordObj.word}! Like ${currentWordObj.meaning}.`,
+              () => {
+                const nextStep = currentStepRef.current + 1;
+                if (nextStep > currentLevel.totalSteps) {
+                  setTimeout(handleLevelCompleted, 350);
+                } else {
+                  setCurrentStep(nextStep);
+                  setTimeout(() => {
+                    pickNextTargetForLevel(currentLevel, nextStep);
+                  }, 400);
+                }
+              }
+            );
             return;
           }
         }
@@ -365,35 +672,47 @@ export default function App() {
         const nextStep = currentStepRef.current + 1;
         if (nextStep > currentLevel.totalSteps) {
           sound.speak(randomPraise, () => {
-            setTimeout(handleLevelCompleted, 400);
+            setTimeout(handleLevelCompleted, 350);
           });
         } else {
           setCurrentStep(nextStep);
           sound.speak(randomPraise, () => {
             setTimeout(() => {
               pickNextTargetForLevel(currentLevel, nextStep);
-            }, 450);
+            }, 400);
           });
         }
       } else {
         // Wrong answer: gentle, reassuring guidance
+        const wrongDots = letterInfo.dots;
+        setErrorDots(wrongDots);
+        levelErrorCountRef.current += 1;
         setFeedbackStatus('wrong');
         sound.playGentleRetryTone();
 
-        setUserStats((prev) => ({
-          ...prev,
-          streak: 0,
-          hearts: infiniteHearts ? prev.hearts : Math.max(0, prev.hearts - 1),
-        }));
+        setUserStats((prev) => {
+          const newHearts = infiniteHearts ? prev.hearts : Math.max(0, prev.hearts - 1);
+          if (!infiniteHearts && newHearts <= 0) {
+            setTimeout(() => {
+              setIsOutOfHeartsModalOpen(true);
+              sound.speak("You ran out of hearts! Don't worry, let's refill them so you can keep going!");
+            }, 500);
+          }
+          return {
+            ...prev,
+            streak: 0,
+            hearts: newHearts,
+          };
+        });
 
-        const wrongInfo = BRAILLE_ALPHABET[char];
         setFeedbackMessage(
-          `You pressed ${char.toUpperCase()} (${formatDotsDescription(wrongInfo.dots)}). To type ${target.toUpperCase()}: ${targetInfo.buttonInstructions}`
+          `You pressed ${char.toUpperCase()} (${formatDotsDescription(wrongDots)}). To type ${target.toUpperCase()}: ${targetInfo.buttonInstructions}`
         );
 
         sound.speak(
           `Nice try! You pressed ${char.toUpperCase()}. Let's find ${target.toUpperCase()} together! ${targetInfo.buttonInstructions}`
         );
+        isProcessingInputRef.current = false;
       }
     },
     [
@@ -410,11 +729,28 @@ export default function App() {
   // Global Keydown Listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // If modal is open, Space continues
+      // Don't capture when typing in an input or textarea
+      const targetEl = e.target as HTMLElement;
+      if (targetEl.tagName === 'INPUT' || targetEl.tagName === 'TEXTAREA' || targetEl.tagName === 'SELECT') {
+        return;
+      }
+
+      // If level complete modal is open, Space or Enter advances
       if (isLevelCompleteOpenRef.current) {
         if (e.code === 'Space' || e.code === 'Enter') {
           e.preventDefault();
           handleAdvanceToNextLevel();
+          return;
+        }
+      }
+
+      // If out of hearts modal is open, Space or Enter refills
+      if (isOutOfHeartsOpenRef.current) {
+        if (e.code === 'Space' || e.code === 'Enter') {
+          e.preventDefault();
+          setInfiniteHearts(true);
+          setUserStats((prev) => ({ ...prev, hearts: 5 }));
+          setIsOutOfHeartsModalOpen(false);
           return;
         }
       }
@@ -424,6 +760,9 @@ export default function App() {
         startAudioSession();
         return;
       }
+
+      // Prevent key repeat when holding down keys
+      if (e.repeat) return;
 
       // Spacebar: Repeat prompt or instruction
       if (e.code === 'Space') {
@@ -453,6 +792,8 @@ export default function App() {
       const key = e.key.toLowerCase();
       if (/^[a-z]$/.test(key)) {
         e.preventDefault();
+        // Ignore if currently advancing between steps
+        if (isProcessingInputRef.current) return;
         handleCharacterInput(key);
       }
     };
@@ -467,8 +808,7 @@ export default function App() {
       ? BRAILLE_ALPHABET[discoveredLetter]?.dots || []
       : BRAILLE_ALPHABET[targetLetter]?.dots || [];
 
-  const currentDisplayLetter =
-    mode === 'discovery' ? discoveredLetter : targetLetter;
+  const currentDisplayLetter = mode === 'discovery' ? discoveredLetter : targetLetter;
   const currentLetterInfo = BRAILLE_ALPHABET[currentDisplayLetter];
 
   // Progress percentage within level
@@ -547,6 +887,25 @@ export default function App() {
 
         {/* Gamified Stat Badges */}
         <div className="flex items-center gap-1.5 sm:gap-2.5 flex-shrink-0">
+          {/* Hearts / Lives */}
+          <button
+            onClick={() => {
+              if (!infiniteHearts) {
+                setUserStats((prev) => ({ ...prev, hearts: 5 }));
+                sound.playGemXpSound();
+              }
+            }}
+            className="flex items-center gap-1 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-xl bg-rose-950/40 border border-rose-500/30 text-rose-400 text-xs font-bold transition hover:bg-rose-900/40 cursor-pointer"
+            title={
+              infiniteHearts
+                ? 'Infinite Hearts Active'
+                : `${userStats.hearts} Hearts Remaining (Click to Refill)`
+            }
+          >
+            <Heart className="w-3.5 h-3.5 fill-rose-500 text-rose-400" />
+            <span>{infiniteHearts ? '∞' : userStats.hearts}</span>
+          </button>
+
           {/* Streak */}
           <div
             className="flex items-center gap-1 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-xl bg-orange-950/40 border border-orange-500/30 text-orange-400 text-xs font-bold"
@@ -613,7 +972,7 @@ export default function App() {
               }}
               title="Repeat audio prompt"
               aria-label="Repeat voice prompt"
-              className="p-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-amber-400 transition"
+              className="p-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-amber-400 transition cursor-pointer"
             >
               <RotateCcw className="w-3.5 h-3.5" />
             </button>
@@ -626,7 +985,7 @@ export default function App() {
               }
               title={`Switch contrast theme (Current: ${theme})`}
               aria-label="Toggle theme contrast"
-              className="p-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-amber-400 transition"
+              className="p-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-amber-400 transition cursor-pointer"
             >
               {theme === 'dark' ? (
                 <Moon className="w-3.5 h-3.5 text-amber-400" />
@@ -641,7 +1000,7 @@ export default function App() {
               onClick={() => setShowSettings(!showSettings)}
               title="Settings"
               aria-label="Settings"
-              className="p-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-amber-400 transition"
+              className="p-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-amber-400 transition cursor-pointer"
             >
               <Settings2 className="w-3.5 h-3.5" />
             </button>
@@ -670,7 +1029,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Settings Dropdown Drawer (With Voice Persona & Testing) */}
+      {/* Settings Dropdown Drawer */}
       {showSettings && (
         <div className="flex-none p-3 px-4 sm:px-6 bg-slate-900/95 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs z-20">
           <div className="flex flex-wrap items-center gap-4 sm:gap-6">
@@ -686,7 +1045,6 @@ export default function App() {
                 onChange={(e) => {
                   const val = parseFloat(e.target.value);
                   setSpeechRate(val);
-                  sound.speechRate = val;
                 }}
                 className="w-20 accent-amber-500 cursor-pointer"
               />
@@ -696,7 +1054,7 @@ export default function App() {
             {/* Test Voice Sample Button */}
             <button
               onClick={() => sound.previewVoice()}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-400/40 text-[11px] font-bold"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-400/40 text-[11px] font-bold cursor-pointer"
               title="Listen to a voice preview"
             >
               <Play className="w-3 h-3 text-amber-400" />
@@ -724,21 +1082,40 @@ export default function App() {
               </div>
             )}
 
+            {/* Sound FX Toggle */}
             <button
-              onClick={() => {
-                const next = !soundEffects;
-                setSoundEffects(next);
-                sound.soundEffectsEnabled = next;
-              }}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px]"
+              onClick={() => setSoundEffects(!soundEffects)}
+              className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] cursor-pointer"
             >
-              {soundEffects ? <Volume2 className="w-3 h-3 text-amber-400" /> : <VolumeX className="w-3 h-3 text-slate-500" />}
+              {soundEffects ? (
+                <Volume2 className="w-3 h-3 text-amber-400" />
+              ) : (
+                <VolumeX className="w-3 h-3 text-slate-500" />
+              )}
               <span>FX: {soundEffects ? 'ON' : 'OFF'}</span>
             </button>
 
+            {/* Infinite Hearts Toggle */}
+            <button
+              onClick={() => {
+                const next = !infiniteHearts;
+                setInfiniteHearts(next);
+                if (next) setUserStats((prev) => ({ ...prev, hearts: 5 }));
+              }}
+              className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border text-[11px] cursor-pointer ${
+                infiniteHearts
+                  ? 'bg-rose-950/40 border-rose-500/40 text-rose-300'
+                  : 'bg-slate-800 border-slate-700 text-slate-300'
+              }`}
+            >
+              <Infinity className="w-3 h-3 text-rose-400" />
+              <span>Infinite Hearts: {infiniteHearts ? 'ON' : 'OFF'}</span>
+            </button>
+
+            {/* Alphabet Strip Toggle */}
             <button
               onClick={() => setShowAlphabetStrip(!showAlphabetStrip)}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px]"
+              className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] cursor-pointer"
             >
               <Eye className="w-3 h-3 text-sky-400" />
               <span>Alphabet Strip: {showAlphabetStrip ? 'ON' : 'OFF'}</span>
@@ -756,15 +1133,24 @@ export default function App() {
 
             <button
               onClick={handleUnlockAll}
-              className="text-amber-400 hover:underline flex items-center gap-1 font-bold text-[11px]"
+              className="text-amber-400 hover:underline flex items-center gap-1 font-bold text-[11px] cursor-pointer"
             >
               <Unlock className="w-3 h-3" />
               Unlock All (Teacher)
             </button>
 
             <button
+              onClick={handleResetProgress}
+              className="text-rose-400 hover:underline flex items-center gap-1 font-bold text-[11px] cursor-pointer"
+              title="Reset progress for a new child"
+            >
+              <Trash2 className="w-3 h-3" />
+              Reset Progress
+            </button>
+
+            <button
               onClick={() => setIsExportModalOpen(true)}
-              className="text-sky-400 hover:underline flex items-center gap-1 font-bold text-[11px]"
+              className="text-sky-400 hover:underline flex items-center gap-1 font-bold text-[11px] cursor-pointer"
             >
               <Code2 className="w-3 h-3" />
               Standalone HTML Code
@@ -820,10 +1206,12 @@ export default function App() {
             </div>
           </div>
 
-          {/* Braille Cell Graphic */}
+          {/* Braille Cell Graphic with Target and Error dot diagnostics */}
           <div className="flex-1 flex items-center justify-center py-0.5 sm:py-1">
             <BrailleCell
               activeDots={currentActiveDots}
+              targetDots={BRAILLE_ALPHABET[currentDisplayLetter]?.dots || []}
+              errorDots={feedbackStatus === 'wrong' && errorDots ? errorDots : undefined}
               theme={theme}
               label={
                 mode === 'discovery'
@@ -844,7 +1232,7 @@ export default function App() {
         <div className="lg:col-span-5 flex flex-col justify-between p-3 sm:p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/80 shadow-lg gap-2 min-h-0">
           {/* Target Showcase Box */}
           <div className="flex-1 flex flex-col items-center justify-center p-3 rounded-xl bg-slate-950/80 border border-slate-800 text-center relative overflow-hidden min-h-[165px]">
-            {/* Word spelling breadcrumbs if active */}
+            {/* Word spelling breadcrumbs if active (Level 9) */}
             {currentWordObj && (
               <div className="mb-0.5 text-[11px] font-bold text-sky-400 flex items-center gap-1">
                 <span>Spelling:</span>
@@ -893,11 +1281,17 @@ export default function App() {
               <span>{currentLetterInfo?.buttonInstructions}</span>
             </div>
 
-            {/* Wrong letter warning */}
+            {/* Wrong letter visual comparison */}
             {lastTypedLetter && feedbackStatus === 'wrong' && (
-              <div className="mt-1.5 text-[11px] text-rose-400 bg-rose-950/40 border border-rose-800/60 rounded-lg p-1 px-2 w-full">
-                You pressed: <strong>{lastTypedLetter.toUpperCase()}</strong> (
-                {formatDotsDescription(BRAILLE_ALPHABET[lastTypedLetter]?.dots || [])})
+              <div className="mt-1.5 text-[11px] text-rose-300 bg-rose-950/50 border border-rose-800/80 rounded-lg p-1.5 px-2.5 w-full text-left">
+                <div className="font-bold text-rose-200">
+                  You pressed: {lastTypedLetter.toUpperCase()} (
+                  {formatDotsDescription(BRAILLE_ALPHABET[lastTypedLetter]?.dots || [])})
+                </div>
+                <div className="text-[10px] text-slate-300 mt-0.5">
+                  Target {targetLetter.toUpperCase()} needs:{' '}
+                  {formatDotsDescription(BRAILLE_ALPHABET[targetLetter]?.dots || [])}
+                </div>
               </div>
             )}
           </div>
@@ -947,11 +1341,14 @@ export default function App() {
                     pickNextTargetForLevel(currentLevel, nextStep);
                   }
                 } else {
-                  const pool = range === 'A-J' ? LETTERS_A_TO_J : range === 'A-T' ? LETTERS_A_TO_T : LETTERS_A_TO_Z;
-                  const nextRand = pool[Math.floor(Math.random() * pool.length)];
+                  const nextRand = getNextPracticeLetter(range, targetLetter);
                   const nextInfo = BRAILLE_ALPHABET[nextRand];
+                  targetLetterRef.current = nextRand;
                   setTargetLetter(nextRand);
-                  sound.speak(`Next letter! Type ${nextRand.toUpperCase()}, as in ${nextInfo.word}. ${nextInfo.buttonInstructions}`);
+                  setErrorDots(null);
+                  sound.speak(
+                    `Next letter! Type ${nextRand.toUpperCase()}, as in ${nextInfo.word}. ${nextInfo.buttonInstructions}`
+                  );
                 }
               }}
               className="py-2.5 px-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer transition shadow-md shadow-amber-500/20"
@@ -968,9 +1365,13 @@ export default function App() {
               <span>Shortcuts:</span>
             </div>
             <div className="flex items-center gap-2">
-              <span><kbd className="px-1 py-0.2 rounded bg-slate-800 font-mono text-[9px]">Space</kbd> Repeat</span>
+              <span>
+                <kbd className="px-1 py-0.2 rounded bg-slate-800 font-mono text-[9px]">Space</kbd> Repeat
+              </span>
               <span>·</span>
-              <span><kbd className="px-1 py-0.2 rounded bg-slate-800 font-mono text-[9px]">A-Z</kbd> Chords</span>
+              <span>
+                <kbd className="px-1 py-0.2 rounded bg-slate-800 font-mono text-[9px]">A-Z</kbd> Chords
+              </span>
             </div>
           </div>
         </div>
@@ -978,22 +1379,27 @@ export default function App() {
 
       {/* Optional Collapsible Alphabet Strip */}
       {showAlphabetStrip && (
-        <div className="flex-none p-3 bg-slate-950 border-t border-slate-800 max-w-7xl mx-auto w-full">
-          <div className="flex items-center justify-between mb-1.5 text-[10px] text-slate-400">
-            <span className="font-bold text-slate-200">Alphabet Quick Reference</span>
-            <button onClick={() => setShowAlphabetStrip(false)} className="text-amber-400 hover:underline">
-              Close
-            </button>
-          </div>
-          <div className="grid grid-cols-9 sm:grid-cols-13 gap-1">
+        <div className="flex-none bg-slate-950/90 border-t border-slate-800 px-3 py-2 overflow-x-auto">
+          <div className="flex items-center gap-1.5 min-w-max mx-auto justify-center">
             {LETTERS_A_TO_Z.map((l) => (
               <button
                 key={l}
-                onClick={() => handleCharacterInput(l)}
-                className={`py-1 rounded text-center border text-[11px] font-bold ${
-                  currentDisplayLetter === l
-                    ? 'bg-amber-500 text-slate-950 border-amber-400'
-                    : 'bg-slate-900 border-slate-800 text-slate-300'
+                onClick={() => {
+                  if (mode === 'discovery') {
+                    setDiscoveredLetter(l);
+                  } else {
+                    setTargetLetter(l);
+                  }
+                  setErrorDots(null);
+                  const info = BRAILLE_ALPHABET[l];
+                  sound.speak(
+                    `Letter ${l.toUpperCase()}, as in ${info.word}. ${info.buttonInstructions}`
+                  );
+                }}
+                className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg font-bold text-xs flex items-center justify-center transition cursor-pointer ${
+                  (mode === 'discovery' ? discoveredLetter : targetLetter) === l
+                    ? 'bg-amber-500 text-slate-950 font-black scale-105'
+                    : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800'
                 }`}
               >
                 {l.toUpperCase()}
@@ -1017,12 +1423,31 @@ export default function App() {
       <LevelCompleteModal
         isOpen={isLevelCompleteModalOpen}
         level={currentLevel}
-        earnedXp={25}
-        stars={3}
+        earnedXp={levelEarnedXp}
+        stars={levelStars}
+        accuracy={levelAccuracy}
         hasNextLevel={currentLevelId < LESSON_LEVELS.length}
         onNextLevel={handleAdvanceToNextLevel}
         onReplayLevel={handleReplayCurrentLevel}
         onClose={() => setIsLevelCompleteModalOpen(false)}
+      />
+
+      {/* Out of Hearts Modal */}
+      <OutOfHeartsModal
+        isOpen={isOutOfHeartsModalOpen}
+        onRefillHearts={() => {
+          setUserStats((prev) => ({ ...prev, hearts: 5 }));
+          setIsOutOfHeartsModalOpen(false);
+          sound.playGemXpSound();
+          sound.speak('Hearts refilled! Keep having fun typing Braille!');
+        }}
+        onEnableInfiniteHearts={() => {
+          setInfiniteHearts(true);
+          setUserStats((prev) => ({ ...prev, hearts: 5 }));
+          setIsOutOfHeartsModalOpen(false);
+          sound.playStreakFanfare();
+          sound.speak('Infinite hearts activated! You can now practice freely without limits!');
+        }}
       />
 
       {/* Standalone HTML Code Modal */}

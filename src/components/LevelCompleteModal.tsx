@@ -7,6 +7,7 @@ interface LevelCompleteModalProps {
   level: LessonLevel;
   earnedXp: number;
   stars: number;
+  accuracy?: number;
   hasNextLevel: boolean;
   onNextLevel: () => void;
   onReplayLevel: () => void;
@@ -18,6 +19,7 @@ export const LevelCompleteModal: React.FC<LevelCompleteModalProps> = ({
   level,
   earnedXp,
   stars,
+  accuracy = 100,
   hasNextLevel,
   onNextLevel,
   onReplayLevel,
@@ -78,7 +80,7 @@ export const LevelCompleteModal: React.FC<LevelCompleteModalProps> = ({
           </div>
           <div className="p-3 rounded-2xl bg-slate-950/70 border border-slate-800">
             <div className="text-[10px] uppercase font-bold text-slate-400">Accuracy</div>
-            <div className="text-xl font-extrabold text-emerald-400">100%</div>
+            <div className="text-xl font-extrabold text-emerald-400">{accuracy}%</div>
           </div>
         </div>
 
